@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# virtual environment
+venv/
+.env/
+
+# macOS
+.DS_Store
+
+# models
+models/*.pt
+
+# temp
+*.log
+*.tmp
