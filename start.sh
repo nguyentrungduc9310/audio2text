@@ -2,12 +2,12 @@
 
 source venv/bin/activate
 
-echo "Starting server..."
+echo "Starting API..."
 
-python server.py &
+uvicorn server:app --host 127.0.0.1 --port 8000 &
 
-sleep 5
+sleep 3
 
-echo "Starting client..."
+echo "Starting UI..."
 
-streamlit run app.py --server.maxUploadSize=1024
+streamlit run app.py --server.maxUploadSize=2048

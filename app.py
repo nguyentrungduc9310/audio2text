@@ -1,29 +1,29 @@
 import streamlit as st
 import requests
 import time
-import io
-import os
-import math
-from pydub import AudioSegment
 
 API_URL = "http://127.0.0.1:8000"
 
-st.set_page_config(page_title="Audio → Text", page_icon="🎥")
+st.set_page_config(
+    page_title="Audio / Video → Text",
+    page_icon="🎙",
+    layout="wide"
+)
 
-st.title("🎥 Audio / Video → Text")
-
-session = requests.Session()
+st.title("🎙 Audio / Video → Text Transcription")
 
 
-with st.spinner("Waiting for server..."):
+# ----------------------------
+# Wait for server
+# ----------------------------
+
+with st.spinner("Connecting to server..."):
 
     while True:
-
         try:
+            r = requests.get(f"{API_URL}/health")
 
-            r = session.get(f"{API_URL}/health")
-
-            if r.json()["ready"]:
+            if r.status_code == 200:
                 break
 
         except:
@@ -32,112 +32,135 @@ with st.spinner("Waiting for server..."):
         time.sleep(1)
 
 
-info = session.get(f"{API_URL}/models").json()
+st.success("Server connected")
 
-available = set(info["loaded"])
 
-all_models = info["all"]
+# ----------------------------
+# Model selector
+# ----------------------------
+
+st.sidebar.title("Settings")
+
+models = [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3"
+]
 
 model = st.sidebar.selectbox(
-    "Model",
-    all_models
+    "Whisper Model",
+    models,
+    index=1
 )
 
-if model not in available:
-
-    if st.sidebar.button("Download model"):
-
-        session.post(
-            f"{API_URL}/models/download",
-            params={"model_name": model}
-        )
-
-        st.sidebar.success("downloaded")
+st.sidebar.info(f"Selected model: {model}")
 
 
-tab_audio, tab_video = st.tabs(["Audio → Text", "Video → Text"])
+# ----------------------------
+# Upload
+# ----------------------------
 
+file = st.file_uploader(
+    "Upload audio or video",
+    type=[
+        "mp3",
+        "wav",
+        "m4a",
+        "mp4",
+        "mov",
+        "mkv",
+        "avi"
+    ]
+)
 
-with tab_audio:
+# ----------------------------
+# Transcription
+# ----------------------------
 
-    file = st.file_uploader(
-        "Upload audio",
-        type=["mp3", "wav", "m4a"]
-    )
+if file:
 
-    if file:
+    st.write("File:", file.name)
 
-        if st.button("Transcribe audio"):
+    if st.button("Start Transcription"):
 
-            data = file.read()
+        progress = st.progress(0)
 
-            audio = AudioSegment.from_file(
-                io.BytesIO(data),
-                format=os.path.splitext(file.name)[1][1:]
-            )
+        with st.spinner("Uploading and processing..."):
 
-            duration = len(audio)
-
-            chunk = 60000
-
-            parts = math.ceil(duration / chunk)
-
-            progress = st.progress(0)
-
-            text = ""
-
-            for i in range(parts):
-
-                seg = audio[i*chunk:(i+1)*chunk]
-
-                buf = io.BytesIO()
-
-                seg.export(buf, format="wav")
-
-                buf.seek(0)
-
-                resp = session.post(
-                    f"{API_URL}/transcribe",
-                    params={"model_name": model},
-                    files={"file": ("chunk.wav", buf)}
-                )
-
-                text += resp.json()["text"]
-
-                progress.progress((i+1)/parts)
-
-            st.text_area("Result", text)
-
-            st.download_button(
-                "Download txt",
-                text,
-                file_name="audio.txt"
-            )
-
-
-with tab_video:
-
-    file = st.file_uploader(
-        "Upload video",
-        type=["mp4", "mov", "mkv"]
-    )
-
-    if file:
-
-        if st.button("Transcribe video"):
-
-            resp = session.post(
+            r = requests.post(
                 f"{API_URL}/transcribe",
-                params={"model_name": model},
+                params={"model": model},
                 files={"file": (file.name, file)}
             )
 
-            text = resp.json()["text"]
+            progress.progress(100)
 
-            st.text_area("Result", text)
+        if r.status_code != 200:
 
-            st.download_button(
-                "Download txt",
+            st.error("Transcription failed")
+
+        else:
+
+            data = r.json()
+
+            text = data["text"]
+            segments = data["segments"]
+            srt = data["srt"]
+
+            st.success("Transcription complete")
+
+
+            # ----------------------------
+            # Text result
+            # ----------------------------
+
+            st.subheader("Full Text")
+
+            st.text_area(
+                "Transcript",
                 text,
-                file_name="video.txt"
+                height=300
             )
+
+
+            # ----------------------------
+            # Segments
+            # ----------------------------
+
+            st.subheader("Timeline")
+
+            for seg in segments:
+
+                start = round(seg["start"], 2)
+                end = round(seg["end"], 2)
+
+                st.write(
+                    f"[{start}s - {end}s] {seg['text']}"
+                )
+
+
+            # ----------------------------
+            # Downloads
+            # ----------------------------
+
+            st.subheader("Download")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                st.download_button(
+                    "Download TXT",
+                    text,
+                    file_name="transcript.txt"
+                )
+
+            with col2:
+
+                st.download_button(
+                    "Download SRT",
+                    srt,
+                    file_name="subtitle.srt"
+                )

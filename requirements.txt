@@ -1,8 +1,9 @@
 fastapi
 uvicorn
-openai-whisper
-torch
-pydub
+faster-whisper
+ctranslate2
 streamlit
+pydub
+ffmpeg-python
 requests
 python-multipart
