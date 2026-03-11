@@ -5,12 +5,12 @@ import time
 API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(
-    page_title="Audio / Video → Text",
+    page_title="Audio / Video → Text PRO++",
     page_icon="🎙",
     layout="wide"
 )
 
-st.title("🎙 Audio / Video → Text Transcription")
+st.title("🎙 Audio / Video → Text PRO++")
 
 
 # ----------------------------
@@ -21,7 +21,7 @@ with st.spinner("Connecting to server..."):
 
     while True:
         try:
-            r = requests.get(f"{API_URL}/health")
+            r = requests.get(f"{API_URL}/health", timeout=5)
 
             if r.status_code == 200:
                 break
@@ -36,7 +36,7 @@ st.success("Server connected")
 
 
 # ----------------------------
-# Model selector
+# Sidebar settings
 # ----------------------------
 
 st.sidebar.title("Settings")
@@ -57,110 +57,348 @@ model = st.sidebar.selectbox(
 
 st.sidebar.info(f"Selected model: {model}")
 
-
-# ----------------------------
-# Upload
-# ----------------------------
-
-file = st.file_uploader(
-    "Upload audio or video",
-    type=[
-        "mp3",
-        "wav",
-        "m4a",
-        "mp4",
-        "mov",
-        "mkv",
-        "avi"
-    ]
+vad_filter = st.sidebar.checkbox(
+    "VAD Filter",
+    value=True,
+    help="Voice Activity Detection — filters out non-speech segments"
 )
 
+
 # ----------------------------
-# Transcription
+# Mode selection
 # ----------------------------
 
-if file:
+mode = st.radio(
+    "Processing Mode",
+    ["Single File", "Batch Processing"],
+    horizontal=True
+)
 
-    st.write("File:", file.name)
+SUPPORTED_TYPES = [
+    "mp3",
+    "wav",
+    "m4a",
+    "mp4",
+    "mov",
+    "mkv",
+    "avi"
+]
 
-    if st.button("Start Transcription"):
 
-        progress = st.progress(0)
+# ----------------------------
+# Single File Mode
+# ----------------------------
 
-        with st.spinner("Uploading and processing..."):
+if mode == "Single File":
 
-            r = requests.post(
-                f"{API_URL}/transcribe",
-                params={"model": model},
-                files={"file": (file.name, file)}
+    file = st.file_uploader(
+        "Upload audio or video",
+        type=SUPPORTED_TYPES
+    )
+
+    if file:
+
+        st.write("File:", file.name)
+
+        if st.button("Start Transcription"):
+
+            # Upload via batch endpoint (single file)
+            upload_r = requests.post(
+                f"{API_URL}/batch/upload",
+                params={
+                    "model": model,
+                    "vad_filter": vad_filter
+                },
+                files=[("files", (file.name, file))],
+                timeout=60
             )
 
-            progress.progress(100)
+            if upload_r.status_code != 200:
 
-        if r.status_code != 200:
+                st.error("Upload failed — server returned an error")
 
-            st.error("Transcription failed")
+            else:
 
-        else:
+                job_id = upload_r.json()["job_ids"][0]
 
-            data = r.json()
+                progress = st.progress(0)
+                status_text = st.empty()
+                live_segments = st.container()
+                start_time = time.time()
+                displayed_count = 0
 
-            text = data["text"]
-            segments = data["segments"]
-            srt = data["srt"]
+                while True:
 
-            st.success("Transcription complete")
+                    elapsed = time.time() - start_time
+                    mins, secs = divmod(int(elapsed), 60)
 
+                    status_r = requests.get(
+                        f"{API_URL}/batch/status/{job_id}",
+                        timeout=10
+                    )
 
-            # ----------------------------
-            # Text result
-            # ----------------------------
+                    if status_r.status_code != 200:
+                        status_text.text(f"Checking status... ({mins}m {secs}s)")
+                        time.sleep(2)
+                        continue
 
-            st.subheader("Full Text")
+                    job = status_r.json()
+                    status = job["status"]
+                    pct = job["progress"]
 
-            st.text_area(
-                "Transcript",
-                text,
-                height=300
-            )
+                    progress.progress(pct)
+                    status_text.text(f"Status: {status} — {pct}% ({mins}m {secs}s)")
 
+                    # Display new segments as they arrive
+                    new_segments = job.get("segments", [])
+                    if len(new_segments) > displayed_count:
+                        with live_segments:
+                            for seg in new_segments[displayed_count:]:
+                                start_s = round(seg["start"], 2)
+                                end_s = round(seg["end"], 2)
+                                st.write(f"[{start_s}s - {end_s}s] {seg['text']}")
+                        displayed_count = len(new_segments)
 
-            # ----------------------------
-            # Segments
-            # ----------------------------
+                    if status == "completed":
+                        break
 
-            st.subheader("Timeline")
+                    if status == "failed":
+                        progress.empty()
+                        status_text.empty()
+                        error_msg = job.get("error", "Unknown error")
+                        st.error(f"Transcription failed: {error_msg}")
+                        st.stop()
 
-            for seg in segments:
+                    time.sleep(2)
 
-                start = round(seg["start"], 2)
-                end = round(seg["end"], 2)
+                status_text.empty()
+                live_segments.empty()
 
-                st.write(
-                    f"[{start}s - {end}s] {seg['text']}"
+                # Fetch result
+                result_r = requests.get(
+                    f"{API_URL}/batch/result/{job_id}",
+                    timeout=10
                 )
 
+                if result_r.status_code != 200:
 
-            # ----------------------------
-            # Downloads
-            # ----------------------------
+                    st.error("Failed to fetch transcription result")
 
-            st.subheader("Download")
+                else:
 
-            col1, col2 = st.columns(2)
+                    data = result_r.json().get("result", {})
 
-            with col1:
+                    text = data.get("text", "")
+                    segments = data.get("segments", [])
+                    srt = data.get("srt", "")
+                    language = data.get("language", "unknown")
 
-                st.download_button(
-                    "Download TXT",
-                    text,
-                    file_name="transcript.txt"
+                    elapsed = time.time() - start_time
+                    mins, secs = divmod(int(elapsed), 60)
+
+                    st.success(f"Transcription complete ({mins}m {secs}s)")
+
+                    st.info(f"Detected language: **{language}**")
+
+
+                    # ----------------------------
+                    # Text result
+                    # ----------------------------
+
+                    st.subheader("Full Text")
+
+                    st.text_area(
+                        "Transcript",
+                        text,
+                        height=300
+                    )
+
+
+                    # ----------------------------
+                    # Segments
+                    # ----------------------------
+
+                    st.subheader("Timeline")
+
+                    timeline_box = st.container(height=400)
+
+                    with timeline_box:
+
+                        for seg in segments:
+
+                            start_s = round(seg["start"], 2)
+                            end_s = round(seg["end"], 2)
+
+                            st.write(
+                                f"[{start_s}s - {end_s}s] {seg['text']}"
+                            )
+
+
+                    # ----------------------------
+                    # Downloads
+                    # ----------------------------
+
+                    st.subheader("Download")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+
+                        st.download_button(
+                            "Download TXT",
+                            text,
+                            file_name="transcript.txt"
+                        )
+
+                    with col2:
+
+                        st.download_button(
+                            "Download SRT",
+                            srt,
+                            file_name="subtitle.srt"
+                        )
+
+
+# ----------------------------
+# Batch Processing Mode
+# ----------------------------
+
+if mode == "Batch Processing":
+
+    files = st.file_uploader(
+        "Upload multiple audio or video files",
+        type=SUPPORTED_TYPES,
+        accept_multiple_files=True
+    )
+
+    if files:
+
+        st.write(f"Selected {len(files)} file(s)")
+
+        for f in files:
+            st.write(f"  - {f.name}")
+
+        if st.button("Start Batch Transcription"):
+
+            with st.spinner("Uploading files..."):
+
+                upload_files = [
+                    ("files", (f.name, f))
+                    for f in files
+                ]
+
+                r = requests.post(
+                    f"{API_URL}/batch/upload",
+                    params={
+                        "model": model,
+                        "vad_filter": vad_filter
+                    },
+                    files=upload_files,
+                    timeout=60
                 )
 
-            with col2:
+            if r.status_code != 200:
 
-                st.download_button(
-                    "Download SRT",
-                    srt,
-                    file_name="subtitle.srt"
-                )
+                st.error("Batch upload failed")
+
+            else:
+
+                job_ids = r.json()["job_ids"]
+
+                st.session_state["batch_jobs"] = job_ids
+
+                st.success(f"Submitted {len(job_ids)} job(s)")
+
+    # ----------------------------
+    # Batch status + results
+    # ----------------------------
+
+    if "batch_jobs" in st.session_state:
+
+        st.subheader("Queue Status")
+
+        job_ids = st.session_state["batch_jobs"]
+
+        all_done = True
+
+        for job_id in job_ids:
+
+            status_r = requests.get(f"{API_URL}/batch/status/{job_id}", timeout=10)
+
+            if status_r.status_code != 200:
+                continue
+
+            job = status_r.json()
+
+            status = job["status"]
+            progress = job["progress"]
+            filename = job["filename"]
+
+            if status not in ["completed", "failed"]:
+                all_done = False
+
+            icon = "⏳"
+
+            if status == "completed":
+                icon = "✅"
+            elif status == "failed":
+                icon = "❌"
+            elif status == "processing":
+                icon = "🔄"
+
+            st.write(f"{icon} **{filename}** — {status} ({progress}%)")
+
+            if status == "completed":
+
+                result_r = requests.get(f"{API_URL}/batch/result/{job_id}", timeout=10)
+
+                if result_r.status_code == 200:
+
+                    result = result_r.json().get("result", {})
+
+                    text = result.get("text", "")
+                    srt = result.get("srt", "")
+                    language = result.get("language", "unknown")
+
+                    with st.expander(f"Results — {filename}"):
+
+                        st.info(f"Detected language: **{language}**")
+
+                        st.text_area(
+                            "Transcript",
+                            text,
+                            height=200,
+                            key=f"txt_{job_id}"
+                        )
+
+                        col1, col2 = st.columns(2)
+
+                        base_name = filename.rsplit(".", 1)[0]
+
+                        with col1:
+
+                            st.download_button(
+                                "Download TXT",
+                                text,
+                                file_name=f"{base_name}.txt",
+                                key=f"dl_txt_{job_id}"
+                            )
+
+                        with col2:
+
+                            st.download_button(
+                                "Download SRT",
+                                srt,
+                                file_name=f"{base_name}.srt",
+                                key=f"dl_srt_{job_id}"
+                            )
+
+            elif status == "failed":
+
+                st.error(f"Error: {job.get('error', 'Unknown error')}")
+
+        if not all_done:
+
+            time.sleep(2)
+
+            st.rerun()

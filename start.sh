@@ -10,4 +10,4 @@ sleep 3
 
 echo "Starting UI..."
 
-streamlit run app.py --server.maxUploadSize=2048
+streamlit run app.py --server.maxUploadSize=5120
