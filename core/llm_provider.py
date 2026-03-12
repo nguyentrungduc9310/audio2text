@@ -28,3 +28,7 @@ class LLMProvider(ABC):
     @abstractmethod
     def provider_name(self) -> str:
         pass
+
+    def context_window(self) -> int:
+        """Return the model's context window size in tokens. Override in subclasses."""
+        return 16384

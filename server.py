@@ -2,7 +2,6 @@ from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-import tempfile
 import os
 import json
 import logging
@@ -19,8 +18,29 @@ from core.ollama_provider import OllamaProvider
 from core.api_provider import APIProvider
 from core.summarizer import Summarizer
 from core.translator import Translator as LLMTranslator
+from core.temp_manager import cleanup_temp_dir, make_temp_file, cleanup_stale_files
 
 app = FastAPI()
+
+
+def _periodic_cleanup(interval_seconds=600, max_age_seconds=3600):
+    """Daemon thread: clean stale temp files every interval_seconds."""
+    import time
+    while True:
+        time.sleep(interval_seconds)
+        try:
+            cleanup_stale_files(max_age_seconds)
+        except Exception:
+            pass
+
+
+@app.on_event("startup")
+def startup_cleanup():
+    cleanup_temp_dir()
+    logging.info("Cleaned up temp directory")
+    t = threading.Thread(target=_periodic_cleanup, daemon=True)
+    t.start()
+    logging.info("Started periodic temp cleanup thread (every 10 min)")
 
 transcriber = Transcriber()
 
@@ -111,31 +131,21 @@ def transcribe(
     model: str = "base",
     vad_filter: bool = True
 ):
-
     suffix = file.filename.split(".")[-1]
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix="." + suffix) as tmp:
-
-        content = file.file.read()
-
-        tmp.write(content)
-
-        input_path = tmp.name
-
-    audio_path = input_path + ".wav"
-
-    if suffix.lower() in ["mp4", "mov", "mkv", "avi"]:
-
-        extract_audio(input_path, audio_path)
-
-    else:
-
-        audio_path = input_path
+    input_path = make_temp_file(suffix="." + suffix)
+    audio_path = None
 
     try:
+        with open(input_path, "wb") as f:
+            f.write(file.file.read())
+
+        if suffix.lower() in ["mp4", "mov", "mkv", "avi"]:
+            audio_path = make_temp_file(suffix=".wav")
+            extract_audio(input_path, audio_path)
+        else:
+            audio_path = input_path
 
         text, segments, language = transcriber.transcribe(audio_path, model, vad_filter)
-
         srt = generate_srt(segments)
 
         return {
@@ -146,11 +156,9 @@ def transcribe(
         }
 
     finally:
-
         if os.path.exists(input_path):
             os.remove(input_path)
-
-        if audio_path != input_path and os.path.exists(audio_path):
+        if audio_path and audio_path != input_path and os.path.exists(audio_path):
             os.remove(audio_path)
 
 
@@ -202,38 +210,43 @@ def batch_upload(
     vad_filter: bool = True,
     background_tasks: BackgroundTasks = None
 ):
-
     job_ids = []
+    pending_cleanup = []
 
-    for file in files:
+    try:
+        for file in files:
+            suffix = file.filename.split(".")[-1]
+            input_path = make_temp_file(suffix="." + suffix)
+            audio_path = None
 
-        suffix = file.filename.split(".")[-1]
+            with open(input_path, "wb") as f:
+                f.write(file.file.read())
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix="." + suffix) as tmp:
+            pending_cleanup.append(input_path)
 
-            content = file.file.read()
+            if suffix.lower() in ["mp4", "mov", "mkv", "avi"]:
+                audio_path = make_temp_file(suffix=".wav")
+                pending_cleanup.append(audio_path)
+                extract_audio(input_path, audio_path)
+            else:
+                audio_path = input_path
 
-            tmp.write(content)
+            job_id = queue.create_job(file.filename, model)
 
-            input_path = tmp.name
+            background_tasks.add_task(
+                _process_job, job_id, input_path, audio_path, model, vad_filter
+            )
 
-        audio_path = input_path + ".wav"
+            # Successfully handed off to background task, don't cleanup these files
+            pending_cleanup = []
 
-        if suffix.lower() in ["mp4", "mov", "mkv", "avi"]:
+            job_ids.append(job_id)
 
-            extract_audio(input_path, audio_path)
-
-        else:
-
-            audio_path = input_path
-
-        job_id = queue.create_job(file.filename, model)
-
-        background_tasks.add_task(
-            _process_job, job_id, input_path, audio_path, model, vad_filter
-        )
-
-        job_ids.append(job_id)
+    except Exception:
+        for path in pending_cleanup:
+            if os.path.exists(path):
+                os.remove(path)
+        raise
 
     return {"job_ids": job_ids}
 

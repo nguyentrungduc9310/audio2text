@@ -67,13 +67,15 @@ class Transcriber:
 
         model = self.manager.load(model_name)
 
-        logger.info("Splitting audio into chunks...")
-        chunks, offsets = self.chunker.split(audio_file)
-        logger.info("Split into %d chunk(s)", len(chunks))
-
-        num_chunks = len(chunks)
+        chunks = []
 
         try:
+
+            logger.info("Splitting audio into chunks...")
+            chunks, offsets = self.chunker.split(audio_file)
+            logger.info("Split into %d chunk(s)", len(chunks))
+
+            num_chunks = len(chunks)
 
             all_segments = []
 

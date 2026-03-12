@@ -7,12 +7,12 @@ import os
 API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(
-    page_title="Audio / Video → Text PRO++",
+    page_title="Audio / Video → Text",
     page_icon="🎙",
     layout="wide"
 )
 
-st.title("🎙 Audio / Video → Text PRO++")
+st.title("🎙 Audio / Video → Text")
 
 
 # ----------------------------

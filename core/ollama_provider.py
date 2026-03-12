@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import Optional, List
 
 from core.llm_provider import LLMProvider, LLMResponse
@@ -60,6 +61,12 @@ class OllamaProvider(LLMProvider):
     def __init__(self, default_model: str = DEFAULT_MODEL):
         self.default_model = default_model
         self._client = None
+        self._health_client = None
+        self._context_window_cache: dict = {}
+        self._availability_cache: Optional[bool] = None
+        self._availability_cache_time: float = 0
+        self._models_cache: Optional[List[str]] = None
+        self._models_cache_time: float = 0
 
     def _get_client(self):
         if self._client is None:
@@ -73,15 +80,37 @@ class OllamaProvider(LLMProvider):
                 return None
         return self._client
 
+    def _get_health_client(self):
+        if self._health_client is None:
+            try:
+                import ollama
+                import os
+                host = os.environ.get('OLLAMA_HOST')
+                self._health_client = ollama.Client(host=host, timeout=3.0) if host else ollama.Client(timeout=3.0)
+            except ImportError:
+                logger.warning("ollama package not installed")
+                return None
+        return self._health_client
+
     def is_available(self) -> bool:
-        client = self._get_client()
+        now = time.monotonic()
+        if self._availability_cache is not None and (now - self._availability_cache_time) < 30:
+            return self._availability_cache
+
+        client = self._get_health_client()
         if client is None:
+            self._availability_cache = False
+            self._availability_cache_time = now
             return False
         try:
             client.list()
+            self._availability_cache = True
+            self._availability_cache_time = now
             return True
         except Exception as e:
             logger.warning("Ollama not available: %s", e)
+            self._availability_cache = False
+            self._availability_cache_time = now
             return False
 
     @staticmethod
@@ -151,8 +180,14 @@ class OllamaProvider(LLMProvider):
         )
 
     def list_models(self) -> List[str]:
-        client = self._get_client()
+        now = time.monotonic()
+        if self._models_cache is not None and (now - self._models_cache_time) < 60:
+            return self._models_cache
+
+        client = self._get_health_client()
         if client is None:
+            self._models_cache = []
+            self._models_cache_time = now
             return []
         try:
             response = client.list()
@@ -169,10 +204,40 @@ class OllamaProvider(LLMProvider):
                     name = getattr(m, 'model', '') or getattr(m, 'name', '')
                 if name:
                     result.append(name)
+            self._models_cache = result
+            self._models_cache_time = now
             return result
         except Exception as e:
             logger.warning("Failed to list Ollama models: %s", e)
+            self._models_cache = []
+            self._models_cache_time = now
             return []
 
     def provider_name(self) -> str:
         return "ollama"
+
+    def context_window(self) -> int:
+        model_name = self.default_model
+        if model_name in self._context_window_cache:
+            return self._context_window_cache[model_name]
+
+        ctx = 32768  # fallback
+        client = self._get_health_client()
+        if client is not None:
+            try:
+                info = client.show(model_name)
+                if isinstance(info, dict):
+                    params = info.get("model_info", {})
+                else:
+                    params = getattr(info, "model_info", {}) or {}
+                # Keys vary: look for context_length in model_info values
+                for key, val in (params.items() if isinstance(params, dict) else []):
+                    if "context_length" in key:
+                        ctx = int(val)
+                        break
+            except Exception as e:
+                logger.debug("Could not query context window for %s: %s", model_name, e)
+
+        self._context_window_cache[model_name] = ctx
+        logger.info("Context window for %s: %d tokens", model_name, ctx)
+        return ctx

@@ -9,14 +9,17 @@ PRESETS = {
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o-mini",
+        "context_window": 128000,
     },
     "claude": {
         "base_url": "https://api.anthropic.com/v1",
         "model": "claude-sonnet-4-5-20250929",
+        "context_window": 200000,
     },
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "model": "gemini-2.0-flash",
+        "context_window": 1000000,
     },
 }
 
@@ -28,9 +31,11 @@ class APIProvider(LLMProvider):
             p = PRESETS[preset]
             self.base_url = base_url or p["base_url"]
             self.model = model or p["model"]
+            self._context_window = p.get("context_window", 128000)
         else:
             self.base_url = base_url or PRESETS["openai"]["base_url"]
             self.model = model or PRESETS["openai"]["model"]
+            self._context_window = 128000
 
         self.api_key = api_key
         self._client = None
@@ -40,6 +45,7 @@ class APIProvider(LLMProvider):
             p = PRESETS[preset]
             self.base_url = base_url or p["base_url"]
             self.model = model or p["model"]
+            self._context_window = p.get("context_window", 128000)
         else:
             if base_url:
                 self.base_url = base_url
@@ -106,3 +112,6 @@ class APIProvider(LLMProvider):
 
     def provider_name(self) -> str:
         return "api"
+
+    def context_window(self) -> int:
+        return self._context_window

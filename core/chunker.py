@@ -1,8 +1,9 @@
 import os
 import subprocess
-import tempfile
 
 from pydub import AudioSegment
+
+from core.temp_manager import make_temp_file
 
 
 class AudioChunker:
@@ -41,28 +42,43 @@ class AudioChunker:
 
         start = 0
 
-        while start < duration:
+        tmp_path = None
 
-            end = min(start + self.chunk_ms, duration)
+        try:
 
-            chunk = audio[start:end]
+            while start < duration:
 
-            tmp = tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".mp3"
-            )
-            tmp.close()
+                end = min(start + self.chunk_ms, duration)
 
-            chunk.export(tmp.name, format="mp3")
+                chunk = audio[start:end]
 
-            chunks.append(tmp.name)
+                tmp_path = make_temp_file(suffix=".mp3")
 
-            offsets.append(start / 1000.0)
+                chunk.export(tmp_path, format="mp3")
 
-            if end >= duration:
-                break
+                chunks.append(tmp_path)
 
-            start = end - self.overlap_ms
+                tmp_path = None
+
+                offsets.append(start / 1000.0)
+
+                if end >= duration:
+                    break
+
+                start = end - self.overlap_ms
+
+        except Exception:
+
+            # Clean up the current file if export failed before append
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+            # Clean up all previously created chunk files
+            for path in chunks:
+                if os.path.exists(path):
+                    os.remove(path)
+
+            raise
 
         return chunks, offsets
 
