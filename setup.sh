@@ -91,6 +91,23 @@ mkdir -p uploads
 chmod +x start.sh
 
 
+# -----------------------------
+# Check Ollama (optional)
+# -----------------------------
+echo ""
+echo "Checking Ollama (optional, for summarize/translate)..."
+
+if ! command -v ollama &> /dev/null; then
+    echo "Ollama not found (optional, for summarize/translate)"
+    echo "Install: brew install ollama"
+    echo "Then run: ollama pull qwen3.5:4b"
+else
+    echo "Ollama found!"
+    echo "Pulling Qwen 3.5 model (4b)..."
+    ollama pull qwen3.5:4b || echo "Could not pull model — you can do this later with: ollama pull qwen3.5:4b"
+fi
+
+
 echo ""
 echo "======================================"
 echo " Setup complete!"

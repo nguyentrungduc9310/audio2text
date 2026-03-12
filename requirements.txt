@@ -7,3 +7,5 @@ pydub
 ffmpeg-python
 requests
 python-multipart
+ollama
+openai

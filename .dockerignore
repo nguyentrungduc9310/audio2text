@@ -1,0 +1,14 @@
+venv/
+models/
+__pycache__/
+.git/
+.claude/
+*.md
+uploads/
+temp/
+*.pyc
+.env
+.gitignore
+.dockerignore
+start.sh
+setup.sh
